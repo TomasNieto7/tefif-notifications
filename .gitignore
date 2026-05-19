@@ -1,0 +1,5 @@
+# Ignorar la llave de Firebase (nota que en tu error tiene doble .json)
+serviceAccountKey.json
+serviceAccountKey.json.json
+node_modules/
+.env
