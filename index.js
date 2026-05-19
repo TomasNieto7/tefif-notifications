@@ -63,39 +63,55 @@ app.post("/notifications/broadcast", async (req, res) => {
   }
 });
 
-// Cron Job: Revisar eventos próximos cada hora
-cron.schedule("0 * * * *", async () => {
+// Cron Job: Se ejecuta cada 5 minutos para revisar eventos que inicien pronto
+cron.schedule("*/5 * * * *", async () => {
   try {
-    // Consulta al backend principal de TEFIF [cite: 4]
+    console.log("⏰ Revisando eventos próximos (Aviso de 10 minutos)...");
+
+    // 1. Consultamos el calendario del backend principal
     const res = await axios.get(
       "https://tefif-backend.onrender.com/api/tefif/calendar",
     );
     const eventos = res.data;
 
     const ahora = new Date();
-    const manana = new Date(ahora.getTime() + 24 * 60 * 60 * 1000);
+
+    // Definimos el rango: eventos que inicien entre los próximos 5 y 15 minutos
+    // (Aproximadamente 10 minutos de anticipación)
+    const tiempoMinimo = new Date(ahora.getTime() + 5 * 60 * 1000);
+    const tiempoMaximo = new Date(ahora.getTime() + 15 * 60 * 1000);
 
     for (const item of eventos) {
+      // Unimos la fecha y hora que vienen del backend principal
       const fechaEvento = new Date(`${item.start_date}T${item.start_time}`);
 
-      if (fechaEvento > ahora && fechaEvento <= manana) {
+      // Si el evento cae dentro del margen de los próximos 10 minutos
+      if (fechaEvento >= tiempoMinimo && fechaEvento <= tiempoMaximo) {
+        // 2. Traemos los tokens de Firestore
         const snapshot = await db.collection("push_tokens").get();
         const tokens = [];
-        snapshot.forEach((doc) => tokens.push(doc.data().pushToken));
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data.pushToken) tokens.push(data.pushToken);
+        });
 
+        // 3. Enviamos el recordatorio multicast
         if (tokens.length > 0) {
-          await admin.messaging().sendMulticast({
+          const message = {
             notification: {
-              title: "¡Evento mañana!",
-              body: `Recuerda asistir a: ${item.event?.name}`,
+              title: `⏳ ¡Ya casi empieza: ${item.event?.name || "Evento"}!`,
+              body: `El evento inicia en unos minutos (${item.start_time}). ¡No tardes en llegar!`,
             },
             tokens: tokens,
-          });
+          };
+
+          await admin.messaging().sendEachForMulticast(message);
+          console.log(`📢 Recordatorio enviado para: ${item.event?.name}`);
         }
       }
     }
   } catch (error) {
-    console.error("Error en Cron Job:", error.message);
+    console.error("Error en Cron Job de recordatorios:", error.message);
   }
 });
 
