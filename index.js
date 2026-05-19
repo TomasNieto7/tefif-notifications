@@ -63,31 +63,43 @@ app.post("/notifications/broadcast", async (req, res) => {
   }
 });
 
-// Cron Job: Se ejecuta cada 5 minutos para revisar eventos que inicien pronto
+// Cron Job Corregido: Se ejecuta cada 5 minutos
 cron.schedule("*/5 * * * *", async () => {
   try {
-    console.log("⏰ Revisando eventos próximos (Aviso de 10 minutos)...");
+    console.log("⏰ Iniciando Cron Job de recordatorios...");
 
-    // 1. Consultamos el calendario del backend principal
+    // 1. Autenticación automática con el Backend Principal
+    const loginRes = await axios.post(
+      "https://tefif-backend.onrender.com/api/tefif/users/login",
+      {
+        exp: "TU_EXPEDIENTE_ADMIN", // Pon aquí un expediente de admin válido en tu BD
+        password: "TU_CONTRASEÑA_ADMIN", // Pon aquí su contraseña correspondiente
+      },
+    );
+
+    const { token } = loginRes.data; // Extraemos el JWT generado
+    console.log("🔑 Token de sincronización obtenido con éxito.");
+
+    // 2. Consulta al calendario usando el Header de Autorización requerido
     const res = await axios.get(
       "https://tefif-backend.onrender.com/api/tefif/calendar",
+      {
+        headers: {
+          Authorization: `Bearer ${token}`, // Inyección del token Bearer
+        },
+      },
     );
     const eventos = res.data;
 
     const ahora = new Date();
-
-    // Definimos el rango: eventos que inicien entre los próximos 5 y 15 minutos
-    // (Aproximadamente 10 minutos de anticipación)
     const tiempoMinimo = new Date(ahora.getTime() + 5 * 60 * 1000);
     const tiempoMaximo = new Date(ahora.getTime() + 15 * 60 * 1000);
 
     for (const item of eventos) {
-      // Unimos la fecha y hora que vienen del backend principal
       const fechaEvento = new Date(`${item.start_date}T${item.start_time}`);
 
-      // Si el evento cae dentro del margen de los próximos 10 minutos
       if (fechaEvento >= tiempoMinimo && fechaEvento <= tiempoMaximo) {
-        // 2. Traemos los tokens de Firestore
+        // Traemos los tokens de Firestore
         const snapshot = await db.collection("push_tokens").get();
         const tokens = [];
         snapshot.forEach((doc) => {
@@ -95,7 +107,7 @@ cron.schedule("*/5 * * * *", async () => {
           if (data.pushToken) tokens.push(data.pushToken);
         });
 
-        // 3. Enviamos el recordatorio multicast
+        // Enviamos el recordatorio multicast si hay dispositivos
         if (tokens.length > 0) {
           const message = {
             notification: {
@@ -111,7 +123,10 @@ cron.schedule("*/5 * * * *", async () => {
       }
     }
   } catch (error) {
-    console.error("Error en Cron Job de recordatorios:", error.message);
+    console.error(
+      "❌ Error en Cron Job de recordatorios:",
+      error.response?.data?.message || error.message,
+    );
   }
 });
 
