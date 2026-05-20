@@ -87,7 +87,17 @@ app.delete("/tokens/:user_id", async (req, res) => {
 // ==========================================
 // 3. CRON JOB: RECORDATORIOS INTELIGENTES (Cada 5 min)
 // ==========================================
+// Busca tu bloque del Cron Job y agrega este IF arriba:
+const CRON_ENABLED = process.env.CRON_ENABLED === "true";
+
 cron.schedule("*/5 * * * *", async () => {
+  // CANDADO DE CONTROL DESDE RENDER
+  if (!CRON_ENABLED) {
+    console.log(
+      "⏸️ Cron Job pausado desde las variables de entorno de Render.",
+    );
+    return; // Se detiene inmediatamente sin consumir recursos ni hacer peticiones
+  }
   try {
     console.log("⏰ Iniciando Cron Job de recordatorios...");
 
