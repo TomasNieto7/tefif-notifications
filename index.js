@@ -78,12 +78,14 @@ cron.schedule("*/5 * * * *", async () => {
       `🌐 Conectando al backend principal para autenticar exp: ${adminExp}...`,
     );
 
-    // 1. Autenticación automática con el Backend Principal
     const loginRes = await axios.post(
       "https://tefif-backend.onrender.com/api/tefif/users/login",
       {
-        exp: adminExp,
-        password: adminPassword,
+        exp: String(adminExp).trim(), // Nos aseguramos de que vaya limpio y como string
+        password: String(adminPassword).trim(),
+      },
+      {
+        timeout: 7000, // Si en 7 segundos no responde, rompe la espera y salta al catch
       },
     );
 
