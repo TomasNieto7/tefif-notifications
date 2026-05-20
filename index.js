@@ -184,7 +184,7 @@ cron.schedule("*/5 * * * *", async () => {
             const message = {
               notification: {
                 title: `⏳ ¡Ya casi empieza: ${item.event?.name || "Evento"}!`,
-                body: `El evento inicia en unos minutos (${item.start_time}). ¡No tardes en llegar!`,
+                body: `El evento inicia en unos minutos. ¡No tardes en llegar!`,
               },
               tokens: tokens,
             };
