@@ -9,20 +9,18 @@ app.use(cors());
 app.use(express.json());
 
 // 1. Configuración de Firebase Admin
+// Render creará este archivo físicamente en la raíz gracias a "Secret Files"
 const serviceAccount = require("./serviceAccountKey.json");
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
-// Referencia a Firestore
 const db = admin.firestore();
 
 // Endpoint: Registrar Token en Firestore
 app.post("/tokens/register", async (req, res) => {
   const { user_id, pushToken } = req.body;
   try {
-    // Guardamos el token en una colección llamada "push_tokens"
-    // Usamos el user_id como ID del documento para que no se dupliquen
     await db.collection("push_tokens").doc(user_id).set({
       pushToken: pushToken,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -33,11 +31,10 @@ app.post("/tokens/register", async (req, res) => {
   }
 });
 
-// Endpoint: Broadcast (Usado por addEventScreen y addNoticeScreen)
+// Endpoint: Broadcast masivo
 app.post("/notifications/broadcast", async (req, res) => {
   const { title, body, data } = req.body;
   try {
-    // Obtenemos todos los tokens de la colección
     const snapshot = await db.collection("push_tokens").get();
     const tokens = [];
     snapshot.forEach((doc) => {
@@ -51,7 +48,6 @@ app.post("/notifications/broadcast", async (req, res) => {
         data: data || {},
         tokens: tokens,
       };
-      // Usamos sendEachForMulticast que es la versión más actual del SDK
       const response = await admin.messaging().sendEachForMulticast(message);
       res.status(200).send(`Notificaciones enviadas: ${response.successCount}`);
     } else {
@@ -63,31 +59,36 @@ app.post("/notifications/broadcast", async (req, res) => {
   }
 });
 
-// Cron Job Corregido: Se ejecuta cada 5 minutos
+// Cron Job: Recordatorio inteligente (Cada 5 minutos)
 cron.schedule("*/5 * * * *", async () => {
   try {
     console.log("⏰ Iniciando Cron Job de recordatorios...");
 
+    // Extrayendo de forma segura las credenciales configuradas en Render
+    const adminExp = process.env.ADMIN_EXP;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminExp || !adminPassword) {
+      console.error("❌ Error: ADMIN_EXP o ADMIN_PASSWORD no están configurados en Render.");
+      return;
+    }
+
     // 1. Autenticación automática con el Backend Principal
-    const loginRes = await axios.post(
-      "https://tefif-backend.onrender.com/api/tefif/users/login",
-      {
-        exp: "TU_EXPEDIENTE_ADMIN", // Pon aquí un expediente de admin válido en tu BD
-        password: "TU_CONTRASEÑA_ADMIN", // Pon aquí su contraseña correspondiente
-      },
-    );
+    const loginRes = await axios.post("https://tefif-backend.onrender.com/api/tefif/users/login", {
+      exp: adminExp,
+      password: adminPassword
+    });
 
-    const { token } = loginRes.data; // Extraemos el JWT generado
-    console.log("🔑 Token de sincronización obtenido con éxito.");
+    const { token } = loginRes.data;
 
-    // 2. Consulta al calendario usando el Header de Autorización requerido
+    // 2. Consulta al calendario usando el JWT dinámico
     const res = await axios.get(
       "https://tefif-backend.onrender.com/api/tefif/calendar",
       {
         headers: {
-          Authorization: `Bearer ${token}`, // Inyección del token Bearer
-        },
-      },
+          Authorization: `Bearer ${token}`
+        }
+      }
     );
     const eventos = res.data;
 
@@ -99,7 +100,6 @@ cron.schedule("*/5 * * * *", async () => {
       const fechaEvento = new Date(`${item.start_date}T${item.start_time}`);
 
       if (fechaEvento >= tiempoMinimo && fechaEvento <= tiempoMaximo) {
-        // Traemos los tokens de Firestore
         const snapshot = await db.collection("push_tokens").get();
         const tokens = [];
         snapshot.forEach((doc) => {
@@ -107,29 +107,27 @@ cron.schedule("*/5 * * * *", async () => {
           if (data.pushToken) tokens.push(data.pushToken);
         });
 
-        // Enviamos el recordatorio multicast si hay dispositivos
         if (tokens.length > 0) {
           const message = {
             notification: {
-              title: `⏳ ¡Ya casi empieza: ${item.event?.name || "Evento"}!`,
+              title: `⏳ ¡Ya casi empieza: ${item.event?.name || 'Evento'}!`,
               body: `El evento inicia en unos minutos (${item.start_time}). ¡No tardes en llegar!`,
             },
             tokens: tokens,
           };
-
+          
           await admin.messaging().sendEachForMulticast(message);
           console.log(`📢 Recordatorio enviado para: ${item.event?.name}`);
         }
       }
     }
   } catch (error) {
-    console.error(
-      "❌ Error en Cron Job de recordatorios:",
-      error.response?.data?.message || error.message,
-    );
+    console.error("❌ Error en Cron Job de recordatorios:", error.response?.data?.message || error.message);
   }
 });
 
-app.listen(process.env.PORT || 3000, () =>
-  console.log("Servidor Firestore-ready"),
+// Escucha en el puerto que Render asigne dinámicamente o por defecto en el 3000
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () =>
+  console.log(`Servidor corriendo exitosamente en el puerto ${PORT}`),
 );
