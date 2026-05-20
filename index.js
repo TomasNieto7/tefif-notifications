@@ -59,7 +59,7 @@ app.post("/notifications/broadcast", async (req, res) => {
   }
 });
 
-// Cron Job Optimizado: Con logs de trazabilidad paso a paso
+// Cron Job Corregido con Zona Horaria de México
 cron.schedule("*/5 * * * *", async () => {
   try {
     console.log("⏰ Iniciando Cron Job de recordatorios...");
@@ -74,83 +74,94 @@ cron.schedule("*/5 * * * *", async () => {
       return;
     }
 
-    console.log(
-      `🌐 Conectando al backend principal para autenticar exp: ${adminExp}...`,
-    );
+    // 1. OBTENER LA HORA REAL DE MÉXICO (Forzando el desfase correcto)
+    // Creamos un string con la hora local de CDMX/Querétaro y lo convertimos a objeto Date limpio
+    const cdmxString = new Date().toLocaleString("en-US", {
+      timeZone: "America/Mexico_City",
+    });
+    const ahora = new Date(cdmxString);
 
-    const loginRes = await axios.post(
-      "https://tefif-backend.onrender.com/api/tefif/users/login",
-      {
-        exp: String(adminExp).trim(), // Nos aseguramos de que vaya limpio y como string
-        password: String(adminPassword).trim(),
-      },
-      {
-        timeout: 7000, // Si en 7 segundos no responde, rompe la espera y salta al catch
-      },
-    );
-
-    const { token } = loginRes.data;
-    console.log("🔑 Token de sincronización obtenido con éxito.");
-
-    console.log("📅 Consultando el calendario general...");
-    // 2. Consulta al calendario usando el JWT dinámico
-    const res = await axios.get(
-      "https://tefif-backend.onrender.com/api/tefif/calendar",
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-    );
-    const eventos = res.data;
-    console.log(`📊 Se recuperaron ${eventos.length} entradas de calendario.`);
-
-    const ahora = new Date();
+    // Creamos el rango de evaluación de 10 minutos basado en la hora local
     const tiempoMinimo = new Date(ahora.getTime() + 5 * 60 * 1000);
     const tiempoMaximo = new Date(ahora.getTime() + 15 * 60 * 1000);
 
     console.log(
-      `🕒 Rango de evaluación local: [${tiempoMinimo.toLocaleTimeString()}] hasta [${tiempoMaximo.toLocaleTimeString()}]`,
+      `🕒 Rango de evaluación corregido (Local UAQ): [${tiempoMinimo.toLocaleTimeString("es-MX", { hour12: false })}] hasta [${tiempoMaximo.toLocaleTimeString("es-MX", { hour12: false })}]`,
     );
 
+    // 2. Autenticación automática con el Backend Principal
+    const loginRes = await axios.post(
+      "https://tefif-backend.onrender.com/api/tefif/users/login",
+      {
+        exp: String(adminExp).trim(),
+        password: String(adminPassword).trim(),
+      },
+      { timeout: 7000 },
+    );
+
+    const { token } = loginRes.data;
+
+    // 3. Consulta al calendario usando el JWT dinámico
+    const res = await axios.get(
+      "https://tefif-backend.onrender.com/api/tefif/calendar",
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    const eventos = res.data;
+
+    // Formateador para comparar las fechas en formato YYYY-MM-DD local
+    const formatearFechaLocal = (d) => {
+      const year = d.getFullYear();
+      const month = (d.getMonth() + 1).toString().padStart(2, "0");
+      const day = d.getDate().toString().padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+
+    const fechaHoyLocal = formatearFechaLocal(ahora);
+
     for (const item of eventos) {
-      const fechaEvento = new Date(`${item.start_date}T${item.start_time}`);
-      console.log(
-        `   - Evaluando evento: "${item.event?.name || "Sin nombre"}" programado para las ${item.start_time}`,
-      );
-
-      if (fechaEvento >= tiempoMinimo && fechaEvento <= tiempoMaximo) {
-        console.log(
-          `🎯 ¡Evento en rango detectado! Trayendo tokens de Firestore...`,
+      // Validamos que el evento sea del día de hoy local primero
+      if (item.start_date === fechaHoyLocal) {
+        // Reconstruimos la fecha y hora combinada basándonos en la fecha de hoy local para la matemática
+        const [horaEv, minEv] = item.start_time.split(":");
+        const fechaEvento = new Date(
+          ahora.getFullYear(),
+          ahora.getMonth(),
+          ahora.getDate(),
+          parseInt(horaEv),
+          parseInt(minEv),
         );
-        const snapshot = await db.collection("push_tokens").get();
-        const tokens = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          if (data.pushToken) tokens.push(data.pushToken);
-        });
 
-        if (tokens.length > 0) {
-          const message = {
-            notification: {
-              title: `⏳ ¡Ya casi empieza: ${item.event?.name || "Evento"}!`,
-              body: `El evento inicia en unos minutos (${item.start_time}). ¡No tardes en llegar!`,
-            },
-            tokens: tokens,
-          };
+        if (fechaEvento >= tiempoMinimo && fechaEvento <= tiempoMaximo) {
+          console.log(
+            `🎯 ¡Evento en rango detectado: "${item.event?.name}"! Trayendo tokens...`,
+          );
 
-          const pushRes = await admin.messaging().sendEachForMulticast(message);
-          console.log(
-            `📢 Recordatorio enviado con éxito. Éxitos: ${pushRes.successCount}`,
-          );
-        } else {
-          console.log(
-            "⚠️ No se encontraron tokens en la colección push_tokens.",
-          );
+          const snapshot = await db.collection("push_tokens").get();
+          const tokens = [];
+          snapshot.forEach((doc) => {
+            const data = doc.data();
+            if (data.pushToken) tokens.push(data.pushToken);
+          });
+
+          if (tokens.length > 0) {
+            const message = {
+              notification: {
+                title: `⏳ ¡Ya casi empieza: ${item.event?.name || "Evento"}!`,
+                body: `El evento inicia en unos minutos (${item.start_time}). ¡No tardes en llegar!`,
+              },
+              tokens: tokens,
+            };
+
+            const pushRes = await admin
+              .messaging()
+              .sendEachForMulticast(message);
+            console.log(
+              `📢 Recordatorio enviado con éxito. Enviadas: ${pushRes.successCount}`,
+            );
+          }
         }
       }
     }
-    console.log("🏁 Ciclo de verificación del Cron Job finalizado.");
   } catch (error) {
     console.error(
       "❌ Error en Cron Job de recordatorios:",
